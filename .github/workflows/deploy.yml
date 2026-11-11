@@ -1,0 +1,19 @@
+name: CI-CD billing
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  pipeline:
+    uses: CoworkSpace-Arquitectura/coworkspace-pipelines/.github/workflows/nest-service.yml@main
+    with:
+      service-name: billing
+    secrets: inherit

@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.git
+*.tsbuildinfo
+requests.http
+scripts
+billing.http

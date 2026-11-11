@@ -1,0 +1,79 @@
+@spaceUrl = http://localhost:3001
+@membershipUrl = http://localhost:3002
+@bookingUrl = http://localhost:3004
+@billingUrl = http://localhost:3005
+
+### 1. Sede en Colombia (Space)
+# @name sede
+POST {{spaceUrl}}/locations
+Content-Type: application/json
+
+{ "name": "Sede Stripe", "city": "Bogotá", "address": "Calle 93 #11-30", "country": "CO", "currency": "COP" }
+
+### 2. Sala a $30.000 COP la hora (Space)
+# @name sala
+POST {{spaceUrl}}/rooms
+Content-Type: application/json
+
+{ "locationId": "{{sede.response.body.id}}", "name": "Sala Pacífico", "capacity": 6, "hourlyRate": 30000 }
+
+### 3. Miembro (Membership)
+# @name miembro
+POST {{membershipUrl}}/members
+Content-Type: application/json
+
+{ "name": "Valentina Mora", "email": "valentina-stripe@example.com" }
+
+### 4. Plan que solo incluye puestos (Membership)
+# @name plan
+POST {{membershipUrl}}/plans
+Content-Type: application/json
+
+{ "name": "Solo puestos Stripe", "price": 250000, "resourceAccess": ["DESK"] }
+
+### 5. Suscribir (Billing registra la factura mensual)
+POST {{membershipUrl}}/subscriptions
+Content-Type: application/json
+
+{ "memberId": "{{miembro.response.body.id}}", "planId": "{{plan.response.body.id}}" }
+
+### 6. Reservar la sala 2 horas: $60.000 COP pendiente de pago
+# @name reservaPaga
+POST {{bookingUrl}}/bookings
+Content-Type: application/json
+
+{
+  "memberId": "{{miembro.response.body.id}}",
+  "resourceId": "{{sala.response.body.id}}",
+  "resourceType": "ROOM",
+  "startTime": "2026-12-10T14:00:00.000Z",
+  "endTime": "2026-12-10T16:00:00.000Z"
+}
+
+### 7. El cobro de esa reserva en Billing (trae el enlace de pago de Stripe)
+GET {{billingUrl}}/charges/booking/{{reservaPaga.response.body.id}}
+
+### 8. Ver la reserva (después de pagar)
+GET {{bookingUrl}}/bookings/{{reservaPaga.response.body.id}}
+
+### 9. Otra reserva, para probar la cancelación del pago
+# @name reservaCancelada
+POST {{bookingUrl}}/bookings
+Content-Type: application/json
+
+{
+  "memberId": "{{miembro.response.body.id}}",
+  "resourceId": "{{sala.response.body.id}}",
+  "resourceType": "ROOM",
+  "startTime": "2026-12-11T14:00:00.000Z",
+  "endTime": "2026-12-11T16:00:00.000Z"
+}
+
+### 10. El cobro de la segunda reserva
+GET {{billingUrl}}/charges/booking/{{reservaCancelada.response.body.id}}
+
+### 11. Ver la segunda reserva (después de cancelar)
+GET {{bookingUrl}}/bookings/{{reservaCancelada.response.body.id}}
+
+### 12. Facturas del miembro
+GET {{billingUrl}}/invoices?memberId={{miembro.response.body.id}}

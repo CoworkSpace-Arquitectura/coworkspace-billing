@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChargeStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model ExtraCharge {
+  id              String       @id @default(uuid())
+  bookingId       String       @unique @map("booking_id")
+  memberId        String       @map("member_id")
+  amount          Int
+  currency        String
+  reason          String
+  status          ChargeStatus @default(PENDING)
+  stripeSessionId String?      @unique @map("stripe_session_id")
+  checkoutUrl     String?      @map("checkout_url")
+  failureReason   String?      @map("failure_reason")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([memberId])
+  @@map("extra_charges")
+}
+
+model Invoice {
+  id             String   @id @default(uuid())
+  memberId       String   @map("member_id")
+  subscriptionId String   @map("subscription_id")
+  planName       String   @map("plan_name")
+  period         String
+  amount         Int
+  currency       String   @default("COP")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([subscriptionId, period])
+  @@index([memberId])
+  @@map("invoices")
+}
