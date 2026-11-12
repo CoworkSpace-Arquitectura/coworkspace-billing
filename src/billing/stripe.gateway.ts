@@ -23,6 +23,7 @@ export interface CheckoutRequest {
 export class StripeGateway {
   private readonly stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? '');
   private readonly publicUrl = process.env.PUBLIC_URL ?? 'http://localhost:3005';
+  private readonly frontendUrl = process.env.FRONTEND_URL;
 
   createCheckout(request: CheckoutRequest) {
     return this.stripe.checkout.sessions.create({
@@ -40,8 +41,12 @@ export class StripeGateway {
       client_reference_id: request.bookingId,
       metadata: { chargeId: request.chargeId, bookingId: request.bookingId },
       expires_at: Math.floor(Date.now() / 1000) + 31 * 60,
-      success_url: `${this.publicUrl}/charges/return?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${this.publicUrl}/charges/${request.chargeId}/cancelled`,
+            success_url: this.frontendUrl
+        ? `${this.frontendUrl}/pago/?session_id={CHECKOUT_SESSION_ID}`
+        : `${this.publicUrl}/charges/return?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: this.frontendUrl
+        ? `${this.frontendUrl}/pago/?cancelled=${request.chargeId}`
+        : `${this.publicUrl}/charges/${request.chargeId}/cancelled`,
     });
   }
 
