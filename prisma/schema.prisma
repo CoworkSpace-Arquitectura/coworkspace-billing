@@ -11,6 +11,7 @@ enum ChargeStatus {
   PENDING
   PAID
   FAILED
+  REFUNDED
 }
 
 /// Cobro con Stripe. Es de una reserva (bookingId) o del primer mes de un plan (subscriptionId).
@@ -26,6 +27,9 @@ model ExtraCharge {
   stripeSessionId String?      @unique @map("stripe_session_id")
   checkoutUrl     String?      @map("checkout_url")
   failureReason   String?      @map("failure_reason")
+  paidAt          DateTime?    @map("paid_at")
+  refundedAt      DateTime?    @map("refunded_at")
+  stripeRefundId  String?      @map("stripe_refund_id")
   createdAt       DateTime     @default(now()) @map("created_at")
   updatedAt       DateTime     @updatedAt @map("updated_at")
 
@@ -41,8 +45,10 @@ model Invoice {
   planName       String   @map("plan_name")
   period         String
   amount         Int
-  currency       String   @default("COP")
-  createdAt      DateTime @default(now()) @map("created_at")
+  currency       String    @default("COP")
+  /// Se llena si el plan se reembolsó con la garantía de 7 días
+  refundedAt     DateTime? @map("refunded_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
 
   @@unique([subscriptionId, period])
   @@index([memberId])

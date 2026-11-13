@@ -6,12 +6,14 @@ const BOOKING_MESSAGES: Record<ChargeStatus, string> = {
   PAID: 'Pago aprobado. Tu reserva quedó confirmada.',
   PENDING: 'Estamos confirmando tu pago con Stripe. Revisa en unos segundos.',
   FAILED: 'El pago no se completó. La reserva fue liberada.',
+  REFUNDED: 'Este pago fue reembolsado a tu tarjeta.',
 };
 
 const PLAN_MESSAGES: Record<ChargeStatus, string> = {
   PAID: 'Pago aprobado. Tu plan quedó activo: ya puedes reservar y generar tu credencial.',
   PENDING: 'Estamos confirmando tu pago con Stripe. Revisa en unos segundos.',
   FAILED: 'El pago no se completó. Tu plan no se activó; puedes intentarlo de nuevo.',
+  REFUNDED: 'Este pago fue reembolsado a tu tarjeta.',
 };
 
 const messageFor = (charge: { status: ChargeStatus; subscriptionId: string | null }) =>

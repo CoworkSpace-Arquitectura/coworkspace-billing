@@ -14,6 +14,35 @@ export interface BookingCreatedData {
   currency?: string;
 }
 
+export interface BookingCancelledData {
+  bookingId: string;
+  startTime: string;
+  reason: string;
+}
+
+export interface MembershipExpiredData {
+  subscriptionId: string;
+  reason: string;
+}
+
+/** Política de reembolsos de CoworkSpace */
+export const BOOKING_REFUND_HOURS = 24;
+export const PLAN_GUARANTEE_DAYS = 7;
+const HOUR = 60 * 60 * 1000;
+
+/**
+ * Una reserva pagada se reembolsa completa si se cancela con 24 h o más de anticipación.
+ * Si la cancela el personal de la sede, siempre se reembolsa (no es culpa del cliente).
+ */
+export function isBookingRefundable(startTime: Date, now: Date, reason: string) {
+  return reason === 'CANCELLED_BY_STAFF' || startTime.getTime() - now.getTime() >= BOOKING_REFUND_HOURS * HOUR;
+}
+
+/** Garantía de satisfacción: el plan se reembolsa si se cancela en los 7 días siguientes al pago. */
+export function isPlanRefundable(paidAt: Date, now: Date) {
+  return now.getTime() - paidAt.getTime() <= PLAN_GUARANTEE_DAYS * 24 * HOUR;
+}
+
 export interface MembershipPaymentRequestedData {
   subscriptionId: string;
   memberId: string;
@@ -30,6 +59,7 @@ type Charge = {
   amount: number;
   currency: string;
   checkoutUrl: string | null;
+  stripeSessionId?: string | null;
 };
 
 export interface MembershipActivatedData {
@@ -183,6 +213,81 @@ export class BillingService {
     return { checked: pending.length };
   }
 
+  // Compensación de un pago ya hecho: se canceló una reserva pagada
+  async handleBookingCancelled(data: BookingCancelledData, now = new Date()) {
+    if (data.reason === 'PAYMENT_REJECTED') {
+      return null; // nunca se pagó: no hay nada que devolver
+    }
+    const charge = await this.prisma.extraCharge.findUnique({ where: { bookingId: data.bookingId } });
+    if (charge?.status === ChargeStatus.PENDING) {
+      // Se canceló antes de pagar: se cierra el enlace de Stripe para que no se pueda pagar algo cancelado
+      return this.cancel(charge.id);
+    }
+    if (!charge || charge.status !== ChargeStatus.PAID) {
+      return null;
+    }
+    if (!isBookingRefundable(new Date(data.startTime), now, data.reason)) {
+      this.logger.log(`Reserva ${data.bookingId} cancelada con menos de ${BOOKING_REFUND_HOURS} h: sin reembolso`);
+      return null;
+    }
+    return this.refund(charge, 'Reserva cancelada a tiempo');
+  }
+
+  // Compensación de un pago ya hecho: se canceló un plan dentro de la garantía
+  async handleMembershipExpired(data: MembershipExpiredData, now = new Date()) {
+    if (data.reason !== 'CANCELLED') {
+      return null; // un plan que vence solo no se reembolsa
+    }
+    const charge = await this.prisma.extraCharge.findUnique({ where: { subscriptionId: data.subscriptionId } });
+    if (!charge || charge.status !== ChargeStatus.PAID || !charge.paidAt) {
+      return null;
+    }
+    if (!isPlanRefundable(charge.paidAt, now)) {
+      this.logger.log(`Plan ${data.subscriptionId} cancelado después de ${PLAN_GUARANTEE_DAYS} días: sin reembolso`);
+      return null;
+    }
+    const refunded = await this.refund(charge, `Garantía de ${PLAN_GUARANTEE_DAYS} días`);
+    if (refunded) {
+      // La factura del mes reembolsado deja de contar como ingreso
+      await this.prisma.invoice.updateMany({
+        where: { subscriptionId: data.subscriptionId, refundedAt: null },
+        data: { refundedAt: now },
+      });
+    }
+    return refunded;
+  }
+
+  /** Pide el reembolso a Stripe y deja el cobro en REFUNDED. Idempotente. */
+  private async refund(charge: Charge, reason: string) {
+    if (!charge.stripeSessionId) {
+      return null;
+    }
+    try {
+      const refund = await this.stripe.refund(charge.stripeSessionId, charge.id);
+      const { count } = await this.prisma.extraCharge.updateMany({
+        where: { id: charge.id, status: ChargeStatus.PAID },
+        data: { status: ChargeStatus.REFUNDED, refundedAt: new Date(), stripeRefundId: refund.id },
+      });
+      if (count === 0) {
+        return null; // otro proceso ya lo reembolsó
+      }
+      await this.events.publish('billing.charge.refunded', {
+        chargeId: charge.id,
+        bookingId: charge.bookingId,
+        subscriptionId: charge.subscriptionId,
+        memberId: charge.memberId,
+        amount: charge.amount,
+        currency: charge.currency,
+        reason,
+      });
+      this.logger.log(`Reembolso de ${charge.amount} ${charge.currency} (${reason})`);
+      return this.findCharge(charge.id);
+    } catch (error) {
+      this.logger.error(`No se pudo reembolsar el cobro ${charge.id}: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
   async invoiceMembership(data: MembershipActivatedData) {
     const period = data.renewsAt.slice(0, 10);
     const existing = await this.prisma.invoice.findUnique({
@@ -237,8 +342,9 @@ export class BillingService {
     return charge;
   }
 
+  /** Facturas vigentes: las de planes reembolsados no cuentan como ingreso. */
   findInvoices(memberId?: string) {
-    return this.prisma.invoice.findMany({ where: { memberId }, orderBy: { createdAt: 'desc' } });
+    return this.prisma.invoice.findMany({ where: { memberId, refundedAt: null }, orderBy: { createdAt: 'desc' } });
   }
 
   private async findCharge(id: string) {
@@ -253,7 +359,7 @@ export class BillingService {
   private async markPaid(chargeId: string) {
     const { count } = await this.prisma.extraCharge.updateMany({
       where: { id: chargeId, status: ChargeStatus.PENDING },
-      data: { status: ChargeStatus.PAID },
+      data: { status: ChargeStatus.PAID, paidAt: new Date() },
     });
     if (count === 0) {
       return;

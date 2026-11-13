@@ -58,4 +58,17 @@ export class StripeGateway {
   expire(sessionId: string) {
     return this.stripe.checkout.sessions.expire(sessionId);
   }
+
+  /**
+   * Devuelve el dinero de un pago completado. La clave de idempotencia hace que,
+   * si el evento llega dos veces, Stripe responda con el mismo reembolso y no cree otro.
+   */
+  async refund(sessionId: string, chargeId: string) {
+    const session = await this.stripe.checkout.sessions.retrieve(sessionId);
+    const paymentIntent = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
+    if (!paymentIntent) {
+      throw new Error('La sesión de Stripe no tiene un pago asociado');
+    }
+    return this.stripe.refunds.create({ payment_intent: paymentIntent }, { idempotencyKey: `refund-${chargeId}` });
+  }
 }
