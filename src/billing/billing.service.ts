@@ -14,6 +14,24 @@ export interface BookingCreatedData {
   currency?: string;
 }
 
+export interface MembershipPaymentRequestedData {
+  subscriptionId: string;
+  memberId: string;
+  planName: string;
+  price: number;
+  currency?: string;
+}
+
+type Charge = {
+  id: string;
+  bookingId: string | null;
+  subscriptionId: string | null;
+  memberId: string;
+  amount: number;
+  currency: string;
+  checkoutUrl: string | null;
+};
+
 export interface MembershipActivatedData {
   subscriptionId: string;
   memberId: string;
@@ -50,11 +68,38 @@ export class BillingService {
     const charge = await this.prisma.extraCharge.create({
       data: { bookingId: data.bookingId, memberId: data.memberId, amount: data.extraCharge, currency, reason },
     });
+    return this.openCheckout(charge, reason);
+  }
 
+  // Saga del plan, paso 2: Membership pidió cobrar el primer mes → se crea el pago en Stripe
+  async handleMembershipPaymentRequested(data: MembershipPaymentRequestedData) {
+    if (data.price <= 0) {
+      return null;
+    }
+    const existing = await this.prisma.extraCharge.findUnique({ where: { subscriptionId: data.subscriptionId } });
+    if (existing) {
+      this.logger.warn(`El cobro de la suscripción ${data.subscriptionId} ya existe`);
+      return existing;
+    }
+    const reason = `Plan ${data.planName}, primer mes`;
+    const charge = await this.prisma.extraCharge.create({
+      data: {
+        subscriptionId: data.subscriptionId,
+        memberId: data.memberId,
+        amount: data.price,
+        currency: data.currency ?? 'COP',
+        reason,
+      },
+    });
+    return this.openCheckout(charge, reason);
+  }
+
+  /** Crea la sesión de pago en Stripe para un cobro ya registrado (reserva o plan). */
+  private async openCheckout(charge: Charge, reason: string) {
     try {
       const session = await this.stripe.createCheckout({
         chargeId: charge.id,
-        bookingId: charge.bookingId,
+        reference: charge.bookingId ?? charge.subscriptionId ?? charge.id,
         amount: charge.amount,
         currency: charge.currency,
         description: `CoworkSpace · ${reason}`,
@@ -66,12 +111,13 @@ export class BillingService {
       await this.events.publish('billing.payment.requested', {
         chargeId: updated.id,
         bookingId: updated.bookingId,
+        subscriptionId: updated.subscriptionId,
         memberId: updated.memberId,
         amount: updated.amount,
         currency: updated.currency,
         checkoutUrl: updated.checkoutUrl,
       });
-      this.logger.log(`Pago creado en Stripe para la reserva ${updated.bookingId}`);
+      this.logger.log(`Pago creado en Stripe: ${reason}`);
       return updated;
     } catch (error) {
       await this.markFailed(charge.id, `No se pudo crear el pago en Stripe: ${(error as Error).message}`);
@@ -164,8 +210,23 @@ export class BillingService {
     return invoice;
   }
 
+  /**
+   * Cargos adicionales de reservas. Los pagos de planes no se listan aquí porque
+   * ya aparecen como facturas (así Analytics no cuenta dos veces el mismo dinero).
+   */
   findCharges(memberId?: string) {
-    return this.prisma.extraCharge.findMany({ where: { memberId }, orderBy: { createdAt: 'desc' } });
+    return this.prisma.extraCharge.findMany({
+      where: { memberId, bookingId: { not: null } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findChargeBySubscription(subscriptionId: string) {
+    const charge = await this.prisma.extraCharge.findUnique({ where: { subscriptionId } });
+    if (!charge) {
+      throw new NotFoundException(`No hay un cobro para la suscripción ${subscriptionId}`);
+    }
+    return charge;
   }
 
   async findChargeByBooking(bookingId: string) {
@@ -198,6 +259,18 @@ export class BillingService {
       return;
     }
     const charge = await this.findCharge(chargeId);
+    if (charge.subscriptionId) {
+      // Pago de un plan: Membership lo escucha y activa la suscripción
+      await this.events.publish('billing.subscription.paid', {
+        chargeId: charge.id,
+        subscriptionId: charge.subscriptionId,
+        memberId: charge.memberId,
+        amount: charge.amount,
+        currency: charge.currency,
+      });
+      this.logger.log(`Pago aprobado para la suscripción ${charge.subscriptionId}`);
+      return;
+    }
     await this.events.publish('billing.charge.succeeded', {
       chargeId: charge.id,
       bookingId: charge.bookingId,
@@ -218,6 +291,19 @@ export class BillingService {
       return;
     }
     const charge = await this.findCharge(chargeId);
+    if (charge.subscriptionId) {
+      // Pago de un plan: Membership descarta la suscripción pendiente (compensación)
+      await this.events.publish('billing.subscription.failed', {
+        chargeId: charge.id,
+        subscriptionId: charge.subscriptionId,
+        memberId: charge.memberId,
+        amount: charge.amount,
+        currency: charge.currency,
+        reason,
+      });
+      this.logger.log(`Pago fallido para la suscripción ${charge.subscriptionId}: ${reason}`);
+      return;
+    }
     await this.events.publish('billing.charge.failed', {
       chargeId: charge.id,
       bookingId: charge.bookingId,

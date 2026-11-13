@@ -13,7 +13,8 @@ export function toStripeAmount(amount: number, currency: string) {
 
 export interface CheckoutRequest {
   chargeId: string;
-  bookingId: string;
+  /** Id de la reserva o de la suscripción que se está pagando */
+  reference: string;
   amount: number;
   currency: string;
   description: string;
@@ -38,10 +39,10 @@ export class StripeGateway {
           },
         },
       ],
-      client_reference_id: request.bookingId,
-      metadata: { chargeId: request.chargeId, bookingId: request.bookingId },
+      client_reference_id: request.reference,
+      metadata: { chargeId: request.chargeId, reference: request.reference },
       expires_at: Math.floor(Date.now() / 1000) + 31 * 60,
-            success_url: this.frontendUrl
+      success_url: this.frontendUrl
         ? `${this.frontendUrl}/pago/?session_id={CHECKOUT_SESSION_ID}`
         : `${this.publicUrl}/charges/return?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: this.frontendUrl

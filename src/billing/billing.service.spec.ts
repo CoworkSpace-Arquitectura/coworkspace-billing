@@ -66,7 +66,7 @@ describe('BillingService', () => {
     await service.handleBookingCreated(bookingEvent);
 
     expect(stripe.createCheckout).toHaveBeenCalledWith(
-      expect.objectContaining({ bookingId: 'booking-1', amount: 60000, currency: 'COP' }),
+      expect.objectContaining({ reference: 'booking-1', amount: 60000, currency: 'COP' }),
     );
     expect(events.publish).toHaveBeenCalledWith(
       'billing.payment.requested',
@@ -141,5 +141,59 @@ describe('BillingService', () => {
     expect(toStripeAmount(60000, 'COP')).toBe(6000000);
     expect(toStripeAmount(350, 'MXN')).toBe(35000);
     expect(toStripeAmount(5000, 'CLP')).toBe(5000);
+  });
+
+  describe('pago del plan (Saga de la membresía)', () => {
+    const planEvent = { subscriptionId: 'sub-1', memberId: 'member-1', planName: 'Flex', price: 250000, currency: 'COP' };
+    const planCharge = { ...pendingCharge, id: 'charge-9', bookingId: null, subscriptionId: 'sub-1', amount: 250000 };
+
+    it('crea el pago del primer mes en Stripe', async () => {
+      prisma.extraCharge.findUnique.mockResolvedValue(null);
+      prisma.extraCharge.create.mockResolvedValue({ ...planCharge, stripeSessionId: null });
+      stripe.createCheckout.mockResolvedValue({ id: 'cs_test_9', url: 'https://checkout.stripe.com/c/pay/cs_test_9' });
+      prisma.extraCharge.update.mockResolvedValue({ ...planCharge, checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_9' });
+
+      await service.handleMembershipPaymentRequested(planEvent);
+
+      expect(prisma.extraCharge.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ subscriptionId: 'sub-1', amount: 250000, reason: 'Plan Flex, primer mes' }),
+      });
+      expect(stripe.createCheckout).toHaveBeenCalledWith(expect.objectContaining({ reference: 'sub-1', amount: 250000 }));
+    });
+
+    it('no crea un segundo cobro si el evento del plan llega repetido', async () => {
+      prisma.extraCharge.findUnique.mockResolvedValue(planCharge);
+
+      await service.handleMembershipPaymentRequested(planEvent);
+
+      expect(prisma.extraCharge.create).not.toHaveBeenCalled();
+    });
+
+    it('avisa billing.subscription.paid (no billing.charge.succeeded) cuando se paga un plan', async () => {
+      prisma.extraCharge.findUnique.mockResolvedValue(planCharge);
+      stripe.retrieve.mockResolvedValue({ payment_status: 'paid', status: 'complete' });
+      prisma.extraCharge.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.sync('charge-9');
+
+      expect(events.publish).toHaveBeenCalledWith(
+        'billing.subscription.paid',
+        expect.objectContaining({ subscriptionId: 'sub-1' }),
+      );
+      expect(events.publish).not.toHaveBeenCalledWith('billing.charge.succeeded', expect.anything());
+    });
+
+    it('avisa billing.subscription.failed cuando el pago del plan se cancela', async () => {
+      prisma.extraCharge.findUnique.mockResolvedValue(planCharge);
+      stripe.retrieve.mockResolvedValue({ payment_status: 'unpaid', status: 'open' });
+      prisma.extraCharge.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.cancel('charge-9');
+
+      expect(events.publish).toHaveBeenCalledWith(
+        'billing.subscription.failed',
+        expect.objectContaining({ subscriptionId: 'sub-1', reason: 'Pago cancelado por el usuario' }),
+      );
+    });
   });
 });

@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { BillingService } from './billing.service.js';
-import type { BookingCreatedData, MembershipActivatedData } from './billing.service.js';
+import type { BookingCreatedData, MembershipActivatedData, MembershipPaymentRequestedData } from './billing.service.js';
 
 interface IncomingEvent<T> {
   event: string;
@@ -25,8 +25,8 @@ export class BillingEventsListener implements OnModuleInit, OnModuleDestroy {
       void this.handle(channel, message);
     });
     this.subscriber
-      .subscribe('booking.created', 'membership.activated')
-      .then(() => this.logger.log('Escuchando booking.created y membership.activated'))
+      .subscribe('booking.created', 'membership.activated', 'membership.payment.requested')
+      .then(() => this.logger.log('Escuchando booking.created, membership.activated y membership.payment.requested'))
       .catch((error: Error) => this.logger.error(`No se pudo suscribir: ${error.message}`));
   }
 
@@ -35,6 +35,9 @@ export class BillingEventsListener implements OnModuleInit, OnModuleDestroy {
       if (channel === 'booking.created') {
         const event = JSON.parse(message) as IncomingEvent<BookingCreatedData>;
         await this.billing.handleBookingCreated(event.data);
+      } else if (channel === 'membership.payment.requested') {
+        const event = JSON.parse(message) as IncomingEvent<MembershipPaymentRequestedData>;
+        await this.billing.handleMembershipPaymentRequested(event.data);
       } else if (channel === 'membership.activated') {
         const event = JSON.parse(message) as IncomingEvent<MembershipActivatedData>;
         await this.billing.invoiceMembership(event.data);

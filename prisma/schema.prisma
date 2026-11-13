@@ -13,9 +13,11 @@ enum ChargeStatus {
   FAILED
 }
 
+/// Cobro con Stripe. Es de una reserva (bookingId) o del primer mes de un plan (subscriptionId).
 model ExtraCharge {
   id              String       @id @default(uuid())
-  bookingId       String       @unique @map("booking_id")
+  bookingId       String?      @unique @map("booking_id")
+  subscriptionId  String?      @unique @map("subscription_id")
   memberId        String       @map("member_id")
   amount          Int
   currency        String
