@@ -200,13 +200,20 @@ describe('BillingService', () => {
 
   describe('reembolsos', () => {
     const now = new Date('2026-11-20T12:00:00Z');
-    const paidBooking = { ...pendingCharge, status: 'PAID', paidAt: new Date('2026-11-18T12:00:00Z'), subscriptionId: null };
+    // Reserva hecha (cobro creado) 10 h antes de "ahora"
+    const paidBooking = {
+      ...pendingCharge,
+      status: 'PAID',
+      createdAt: new Date('2026-11-20T02:00:00Z'),
+      paidAt: new Date('2026-11-20T02:05:00Z'),
+      subscriptionId: null,
+    };
     const paidPlan = { ...pendingCharge, id: 'charge-9', bookingId: null, subscriptionId: 'sub-1', status: 'PAID', amount: 250000 };
 
-    it('política de reservas: 100 % con 24 h o más; el personal siempre reembolsa', () => {
-      expect(isBookingRefundable(new Date('2026-11-21T12:00:00Z'), now, 'CANCELLED_BY_MEMBER')).toBe(true);
-      expect(isBookingRefundable(new Date('2026-11-21T11:59:00Z'), now, 'CANCELLED_BY_MEMBER')).toBe(false);
-      expect(isBookingRefundable(new Date('2026-11-20T13:00:00Z'), now, 'CANCELLED_BY_STAFF')).toBe(true);
+    it('política de reservas: arrepentimiento de 24 h desde que se reservó; el personal siempre reembolsa', () => {
+      expect(isBookingRefundable(new Date('2026-11-19T12:00:00Z'), now, 'CANCELLED_BY_MEMBER')).toBe(true);
+      expect(isBookingRefundable(new Date('2026-11-19T11:59:00Z'), now, 'CANCELLED_BY_MEMBER')).toBe(false);
+      expect(isBookingRefundable(new Date('2026-11-01T12:00:00Z'), now, 'CANCELLED_BY_STAFF')).toBe(true);
     });
 
     it('política de planes: garantía de 7 días desde el pago', () => {
@@ -214,7 +221,7 @@ describe('BillingService', () => {
       expect(isPlanRefundable(new Date('2026-11-12T12:00:00Z'), now)).toBe(false);
     });
 
-    it('reembolsa una reserva pagada cancelada a tiempo y publica billing.charge.refunded', async () => {
+    it('reembolsa una reserva pagada cancelada dentro de las 24 h y publica billing.charge.refunded', async () => {
       prisma.extraCharge.findUnique.mockResolvedValue(paidBooking);
       stripe.refund.mockResolvedValue({ id: 're_1' });
       prisma.extraCharge.updateMany.mockResolvedValue({ count: 1 });
@@ -235,8 +242,8 @@ describe('BillingService', () => {
       );
     });
 
-    it('no reembolsa si la reserva se cancela con menos de 24 h', async () => {
-      prisma.extraCharge.findUnique.mockResolvedValue(paidBooking);
+    it('no reembolsa si se cancela más de 24 h después de reservar', async () => {
+      prisma.extraCharge.findUnique.mockResolvedValue({ ...paidBooking, createdAt: new Date('2026-11-18T12:00:00Z') });
 
       await service.handleBookingCancelled(
         { bookingId: 'booking-1', startTime: '2026-11-20T20:00:00Z', reason: 'CANCELLED_BY_MEMBER' },

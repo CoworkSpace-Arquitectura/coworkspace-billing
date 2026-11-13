@@ -26,16 +26,18 @@ export interface MembershipExpiredData {
 }
 
 /** Política de reembolsos de CoworkSpace */
-export const BOOKING_REFUND_HOURS = 24;
+export const BOOKING_REGRET_HOURS = 24;
 export const PLAN_GUARANTEE_DAYS = 7;
 const HOUR = 60 * 60 * 1000;
 
 /**
- * Una reserva pagada se reembolsa completa si se cancela con 24 h o más de anticipación.
+ * Periodo de arrepentimiento: una reserva pagada se reembolsa completa si se cancela
+ * dentro de las 24 h siguientes a hacerla (sin importar cuándo empieza).
  * Si la cancela el personal de la sede, siempre se reembolsa (no es culpa del cliente).
+ * La hora en que se hizo la reserva es la del cobro: Billing lo crea al recibir booking.created.
  */
-export function isBookingRefundable(startTime: Date, now: Date, reason: string) {
-  return reason === 'CANCELLED_BY_STAFF' || startTime.getTime() - now.getTime() >= BOOKING_REFUND_HOURS * HOUR;
+export function isBookingRefundable(bookedAt: Date, now: Date, reason: string) {
+  return reason === 'CANCELLED_BY_STAFF' || now.getTime() - bookedAt.getTime() <= BOOKING_REGRET_HOURS * HOUR;
 }
 
 /** Garantía de satisfacción: el plan se reembolsa si se cancela en los 7 días siguientes al pago. */
@@ -226,8 +228,8 @@ export class BillingService {
     if (!charge || charge.status !== ChargeStatus.PAID) {
       return null;
     }
-    if (!isBookingRefundable(new Date(data.startTime), now, data.reason)) {
-      this.logger.log(`Reserva ${data.bookingId} cancelada con menos de ${BOOKING_REFUND_HOURS} h: sin reembolso`);
+    if (!isBookingRefundable(charge.createdAt, now, data.reason)) {
+      this.logger.log(`Reserva ${data.bookingId} cancelada después de ${BOOKING_REGRET_HOURS} h de hecha: sin reembolso`);
       return null;
     }
     return this.refund(charge, 'Reserva cancelada a tiempo');
