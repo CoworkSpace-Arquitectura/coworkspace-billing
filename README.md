@@ -8,3 +8,8 @@ Microservicio de cobros y facturación. Escucha `booking.created`, crea el pago 
 - **Puerto local:** 3005
 - **Reconciliación:** cada minuto revisa en Stripe los cobros pendientes
 - **Tarjeta de prueba:** 4242 4242 4242 4242, cualquier fecha futura y CVC
+
+## Documentación de la API
+
+- Swagger UI desplegado: https://coworkspace-billing.onrender.com/docs
+- En local: http://localhost:<PUERTO>/docs (el JSON OpenAPI está en `/docs-json`).
