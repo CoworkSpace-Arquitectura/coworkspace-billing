@@ -4,6 +4,10 @@ import { ChargeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EventsService } from '../events/events.service.js';
 import { StripeGateway } from './stripe.gateway.js';
+import { businessCounter } from '../metrics.js';
+
+/** Métrica de negocio para Grafana: pagos aprobados, fallidos y reembolsados */
+const payments = businessCounter('coworkspace_payments_total', 'Pagos procesados con Stripe', ['result', 'kind']);
 
 export interface BookingCreatedData {
   bookingId: string;
@@ -282,6 +286,7 @@ export class BillingService {
         currency: charge.currency,
         reason,
       });
+      payments.inc({ result: 'refunded', kind: charge.subscriptionId ? 'plan' : 'booking' });
       this.logger.log(`Reembolso de ${charge.amount} ${charge.currency} (${reason})`);
       return this.findCharge(charge.id);
     } catch (error) {
@@ -367,6 +372,7 @@ export class BillingService {
       return;
     }
     const charge = await this.findCharge(chargeId);
+    payments.inc({ result: 'paid', kind: charge.subscriptionId ? 'plan' : 'booking' });
     if (charge.subscriptionId) {
       // Pago de un plan: Membership lo escucha y activa la suscripción
       await this.events.publish('billing.subscription.paid', {
@@ -399,6 +405,7 @@ export class BillingService {
       return;
     }
     const charge = await this.findCharge(chargeId);
+    payments.inc({ result: 'failed', kind: charge.subscriptionId ? 'plan' : 'booking' });
     if (charge.subscriptionId) {
       // Pago de un plan: Membership descarta la suscripción pendiente (compensación)
       await this.events.publish('billing.subscription.failed', {
